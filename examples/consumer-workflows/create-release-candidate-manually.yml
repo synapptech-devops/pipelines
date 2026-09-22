@@ -29,7 +29,7 @@ permissions:
 
 jobs:
   create-candidate:
-    uses: synapptech-devops/pipeline-template-powershell/.github/workflows/create-release-candidate-manually.yml@main
+    uses: synapptech-devops/pipelines/.github/workflows/create-release-candidate-manually.yml@main
     with:
       pipeline_ref: main
       app_id: ${{ inputs.app_id }}

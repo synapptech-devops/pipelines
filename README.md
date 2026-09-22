@@ -2,7 +2,7 @@
 
 This repository contains reusable GitHub Actions workflows and the PowerShell implementation they run. A consuming repository keeps only a small caller workflow under `.github/workflows`; it does not need copies of the pipeline scripts or tests.
 
-The central repository is [`synapptech-devops/pipeline-template-powershell`](https://github.com/synapptech-devops/pipeline-template-powershell). The examples use its `main` branch, which means changes merged to `main` are used by consumers on their next run.
+The central repository is [`synapptech-devops/pipelines`](https://github.com/synapptech-devops/pipelines). The examples use its `main` branch, which means changes merged to `main` are used by consumers on their next run.
 
 ## How it works
 
@@ -26,18 +26,18 @@ The pipeline checkout uses `PIPELINE_TOKEN` when supplied and otherwise falls ba
 
 ### 2. Configure Actions access and permissions
 
-In each consumer repository, enable GitHub Actions and make sure its Actions policy allows the reusable workflow in `synapptech-devops/pipeline-template-powershell`. Organization or enterprise policies can also restrict which actions and reusable workflows are allowed.
+In each consumer repository, enable GitHub Actions and make sure its Actions policy allows the reusable workflow in `synapptech-devops/pipelines`. Organization or enterprise policies can also restrict which actions and reusable workflows are allowed.
 
 The caller workflow must grant the permissions needed by the selected pipeline. Use the example's `permissions` block as a starting point; do not grant write permissions to workflows that only validate code.
 
-| Caller workflow | Permissions used |
-| --- | --- |
-| Validate changed applications | `actions: write`, `contents: read` |
+| Caller workflow                      | Permissions used                                                                    |
+| ------------------------------------ | ----------------------------------------------------------------------------------- |
+| Validate changed applications        | `actions: write`, `contents: read`                                                  |
 | Manually build affected applications | `actions: read`, `contents: read`; add `packages: write` when publishing containers |
-| Create release candidates | `contents: write`, `packages: write` |
-| Publish development artifacts | `actions: read`, `contents: read`, `packages: write` |
-| Promote a candidate to production | `contents: write`, `packages: write` |
-| Generate the environment manifest | `contents: write` |
+| Create release candidates            | `contents: write`, `packages: write`                                                |
+| Publish development artifacts        | `actions: read`, `contents: read`, `packages: write`                                |
+| Promote a candidate to production    | `contents: write`, `packages: write`                                                |
+| Generate the environment manifest    | `contents: write`                                                                   |
 
 ### 3. Set up self-hosted runners
 
@@ -110,7 +110,7 @@ permissions:
 
 jobs:
   validate:
-    uses: synapptech-devops/pipeline-template-powershell/.github/workflows/validate-changed-applications.yml@main
+    uses: synapptech-devops/pipelines/.github/workflows/validate-changed-applications.yml@main
     with:
       pipeline_ref: main
     secrets:
@@ -121,15 +121,15 @@ For a public pipeline repository, the `PIPELINE_TOKEN` secret mapping can be omi
 
 ### Available caller examples
 
-| Example file | Purpose | Caller inputs |
-| --- | --- | --- |
-| `validate-changed-applications.yml` | Discover, validate, and build applications affected by a push or pull request; also supports manual full validation. | None |
-| `build-affected-applications-manually.yml` | Rebuild applications using manifests from an earlier validation run. | `source_sha`, `discovery_run_id`, optional `publish_containers` |
-| `create-release-candidate-manually.yml` | Build and publish a candidate for one app. | `app_id`, `ref`, `bump`, optional `initial_version` |
-| `create-release-candidates-from-main.yml` | Create candidates for apps changed since their individual previous candidate. | `commit` |
-| `promote-release-candidate-to-production.yml` | QA-gate, tag, and promote an existing candidate. | `rc_tag` |
-| `publish-development-artifacts.yml` | Rebuild and publish dev-test artifacts from an earlier validation run. | `source_run_id` |
-| `generate-environment-manifest.yml` | Update the environment manifest after candidate or production workflows complete; also supports manual runs. | None |
+| Example file                                  | Purpose                                                                                                              | Caller inputs                                                   |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `validate-changed-applications.yml`           | Discover, validate, and build applications affected by a push or pull request; also supports manual full validation. | None                                                            |
+| `build-affected-applications-manually.yml`    | Rebuild applications using manifests from an earlier validation run.                                                 | `source_sha`, `discovery_run_id`, optional `publish_containers` |
+| `create-release-candidate-manually.yml`       | Build and publish a candidate for one app.                                                                           | `app_id`, `ref`, `bump`, optional `initial_version`             |
+| `create-release-candidates-from-main.yml`     | Create candidates for apps changed since their individual previous candidate.                                        | `commit`                                                        |
+| `promote-release-candidate-to-production.yml` | QA-gate, tag, and promote an existing candidate.                                                                     | `rc_tag`                                                        |
+| `publish-development-artifacts.yml`           | Rebuild and publish dev-test artifacts from an earlier validation run.                                               | `source_run_id`                                                 |
+| `generate-environment-manifest.yml`           | Update the environment manifest after candidate or production workflows complete; also supports manual runs.         | None                                                            |
 
 The release workflow uses the `app_id` from a discovery manifest. Use the generated workflow summary or `discovery-manifest.json` artifact to find that ID. For manual rebuild and development-artifact workflows, use the run ID and source commit SHA from the validation run you want to rebuild.
 

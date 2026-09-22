@@ -49,8 +49,8 @@ jobs:
       - name: Checkout reusable pipeline implementation
         uses: actions/checkout@v7
         with:
-          repository: synapptech-devops/pipeline-template-powershell
-          ref: ${{ inputs.pipeline_ref || (github.repository == 'synapptech-devops/pipeline-template-powershell' && github.sha) || 'main' }}
+          repository: synapptech-devops/pipelines
+          ref: ${{ inputs.pipeline_ref || (github.repository == 'synapptech-devops/pipelines' && github.sha) || 'main' }}
           token: ${{ secrets.PIPELINE_TOKEN || github.token }}
           path: pipeline
       - name: Read project toolchain versions
@@ -99,8 +99,8 @@ jobs:
       - name: Checkout reusable pipeline implementation
         uses: actions/checkout@v7
         with:
-          repository: synapptech-devops/pipeline-template-powershell
-          ref: ${{ inputs.pipeline_ref || (github.repository == 'synapptech-devops/pipeline-template-powershell' && github.sha) || 'main' }}
+          repository: synapptech-devops/pipelines
+          ref: ${{ inputs.pipeline_ref || (github.repository == 'synapptech-devops/pipelines' && github.sha) || 'main' }}
           token: ${{ secrets.PIPELINE_TOKEN || github.token }}
           path: pipeline
       - name: Read application toolchain versions

@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   promote:
-    uses: synapptech-devops/pipeline-template-powershell/.github/workflows/promote-release-candidate-to-production.yml@main
+    uses: synapptech-devops/pipelines/.github/workflows/promote-release-candidate-to-production.yml@main
     with:
       pipeline_ref: main
       rc_tag: ${{ inputs.rc_tag }}

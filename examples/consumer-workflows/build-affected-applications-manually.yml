@@ -24,7 +24,7 @@ permissions:
 
 jobs:
   build:
-    uses: synapptech-devops/pipeline-template-powershell/.github/workflows/build-affected-applications-manually.yml@main
+    uses: synapptech-devops/pipelines/.github/workflows/build-affected-applications-manually.yml@main
     with:
       pipeline_ref: main
       source_sha: ${{ inputs.source_sha }}

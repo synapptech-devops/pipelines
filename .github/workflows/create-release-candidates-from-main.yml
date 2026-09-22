@@ -57,8 +57,8 @@ jobs:
       - name: Checkout reusable pipeline implementation
         uses: actions/checkout@v7
         with:
-          repository: synapptech-devops/pipeline-template-powershell
-          ref: ${{ inputs.pipeline_ref || (github.repository == 'synapptech-devops/pipeline-template-powershell' && github.sha) || 'main' }}
+          repository: synapptech-devops/pipelines
+          ref: ${{ inputs.pipeline_ref || (github.repository == 'synapptech-devops/pipelines' && github.sha) || 'main' }}
           token: ${{ secrets.PIPELINE_TOKEN || github.token }}
           path: pipeline
       - name: Read project toolchain versions
@@ -85,7 +85,7 @@ jobs:
     # both compute the same next rc.N and race pushing the tag.
     concurrency:
       group: rc-${{ matrix.id }}
-    uses: synapptech-devops/pipeline-template-powershell/.github/workflows/build-and-publish-release-candidate.yml@main
+    uses: synapptech-devops/pipelines/.github/workflows/build-and-publish-release-candidate.yml@main
     with:
       pipeline_ref: ${{ inputs.pipeline_ref }}
       app_id: ${{ matrix.id }}
