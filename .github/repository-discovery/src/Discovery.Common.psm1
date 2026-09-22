@@ -104,6 +104,12 @@ function Get-DiscoveryFiles {
   param([string] $Root)
   $rootPath = [System.IO.Path]::GetFullPath($Root)
   $excluded = @('node_modules', '.git', 'dist')
+  # Reusable workflows check out this repository under <workspace>/pipeline.
+  # Do not treat that tooling checkout (including its application fixtures) as
+  # part of the consumer repository being inspected.
+  $pipelineCheckout = Join-Path $rootPath 'pipeline'
+  $pipelineMarker = Join-Path $pipelineCheckout '.github/repository-discovery/src'
+  $excludePipelineCheckout = [System.IO.Directory]::Exists($pipelineMarker)
   $pending = [System.Collections.Generic.Stack[string]]::new()
   $pending.Push($rootPath)
   while ($pending.Count) {
@@ -116,6 +122,7 @@ function Get-DiscoveryFiles {
     foreach ($child in [System.IO.Directory]::EnumerateDirectories($directory)) {
       if ([System.IO.Path]::GetFileName($child) -in $excluded) { continue }
       $relativeDirectory = ConvertTo-RepoPath -Root $rootPath -File $child
+      if ($excludePipelineCheckout -and [string]::Equals($relativeDirectory, 'pipeline', [System.StringComparison]::OrdinalIgnoreCase)) { continue }
       if ($relativeDirectory -eq '.github/repository-discovery/tests' -or $relativeDirectory.StartsWith('.github/repository-discovery/tests/', [System.StringComparison]::OrdinalIgnoreCase)) { continue }
       $pending.Push($child)
     }

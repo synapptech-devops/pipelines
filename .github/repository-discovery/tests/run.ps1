@@ -66,6 +66,20 @@ Assert-True ($roundTripMarkdown.Contains('| portal | 1.2.0-rc.1 | Release candid
 $repoRoot=[System.IO.Path]::GetFullPath((Join-Path $testsRoot '..\..\..'))
 $real=(Get-RepositoryDiscovery $repoRoot).applications
 Assert-True (@($real|Where-Object path -like '.github/repository-discovery/*').Count -eq 0) 'Discovery must exclude its own fixtures from the consuming repository.'
+$nestedPipelineRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('pipeline-discovery-regression-' + [guid]::NewGuid().ToString('N'))
+try {
+  [void][System.IO.Directory]::CreateDirectory((Join-Path $nestedPipelineRoot 'pipeline'))
+  [void][System.IO.Directory]::CreateDirectory((Join-Path $nestedPipelineRoot 'apps/consumer'))
+  [void][System.IO.Directory]::CreateDirectory((Join-Path $nestedPipelineRoot 'pipeline/.github/repository-discovery/src'))
+  [void][System.IO.Directory]::CreateDirectory((Join-Path $nestedPipelineRoot 'pipeline/.github/repository-discovery/tests/fixtures/monorepo/apps/fixture'))
+  Set-Content -LiteralPath (Join-Path $nestedPipelineRoot 'apps/consumer/Consumer.csproj') -Value '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><cicd>true</cicd></PropertyGroup></Project>'
+  Set-Content -LiteralPath (Join-Path $nestedPipelineRoot 'pipeline/.github/repository-discovery/tests/fixtures/monorepo/apps/fixture/Fixture.csproj') -Value '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><cicd>true</cicd></PropertyGroup></Project>'
+  $nestedApps = @(Get-RepositoryDiscovery $nestedPipelineRoot).applications
+  Assert-Equal @($nestedApps | ForEach-Object path) @('apps/consumer') 'A nested pipeline checkout and its test applications must not be discovered.'
+}
+finally {
+  Remove-Item -LiteralPath $nestedPipelineRoot -Recurse -Force
+}
 $workflows=Join-Path $repoRoot '.github\workflows'
 foreach($workflow in Get-ChildItem -LiteralPath $workflows -Filter '*.yml'){
   $content=Get-Content -LiteralPath $workflow.FullName -Raw
