@@ -1,0 +1,78 @@
+name: Release — Create a candidate manually
+
+on:
+  workflow_call:
+    inputs:
+      pipeline_ref:
+        description: Version or ref of the central pipeline repository
+        required: false
+        type: string
+        default: main
+      app_id:
+        description: Application id to version
+        required: true
+        type: string
+      ref:
+        description: Source branch, tag, or commit
+        required: true
+        type: string
+        default: main
+      bump:
+        description: Version bump
+        required: false
+        type: string
+        default: minor
+      initial_version:
+        description: Initial version for an unversioned application
+        required: false
+        type: string
+        default: ""
+
+    secrets:
+      PIPELINE_TOKEN:
+        description: Optional token for checking out a private central pipeline repository
+        required: false
+  workflow_dispatch:
+    inputs:
+      app_id:
+        description: Application id to version (the "id" field from a discovery-manifest.json run)
+        required: true
+        type: string
+      ref:
+        description: Branch, tag, or commit SHA to build the release candidate from
+        required: true
+        default: main
+        type: string
+      bump:
+        description: Version bump relative to this application's latest FINAL version (ignored the very first time; see initial_version)
+        required: false
+        default: minor
+        type: choice
+        options:
+          - major
+          - minor
+          - patch
+      initial_version:
+        description: Starting version (X.Y.Z) if this application has never been versioned before. Defaults to 0.1.0.
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  version-rc:
+    # Serializes RC creation per application so concurrent manual requests
+    # cannot calculate and publish the same next RC version.
+    concurrency:
+      group: rc-${{ inputs.app_id }}
+    uses: synapptech-devops/pipeline-template-powershell/.github/workflows/build-and-publish-release-candidate.yml@main
+    with:
+      pipeline_ref: ${{ inputs.pipeline_ref }}
+      app_id: ${{ inputs.app_id }}
+      ref: ${{ inputs.ref }}
+      bump: ${{ inputs.bump }}
+      initial_version: ${{ inputs.initial_version }}
+    secrets:
+      PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}

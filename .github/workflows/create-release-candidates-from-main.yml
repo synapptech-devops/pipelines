@@ -1,0 +1,95 @@
+name: Generate Release Candidate Artifacts
+
+# Manually creates a release candidate for every application that has changed
+# since its own last release-candidate build (see src/auto-rc.ps1), using the
+# supplied commit as the build source. The reusable RC workflow still builds
+# and tests each selected application before publishing it.
+on:
+  workflow_call:
+    inputs:
+      pipeline_ref:
+        description: Version or ref of the central pipeline repository
+        required: false
+        type: string
+        default: main
+      commit:
+        description: Full source commit SHA
+        required: true
+        type: string
+
+    secrets:
+      PIPELINE_TOKEN:
+        description: Optional token for checking out a private central pipeline repository
+        required: false
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Full Git commit SHA to evaluate and build release candidates from
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+# Candidate discovery relies on the RC tags created by earlier runs as each
+# application's baseline. Serialize commit-triggered discovery so its selected
+# applications are based on a stable published RC baseline.
+concurrency:
+  group: rc-discovery
+  cancel-in-progress: false
+
+jobs:
+  discover-auto-rc:
+    name: Select applications for release candidates
+    runs-on: [self-hosted, Windows, X64]
+    defaults:
+      run:
+        working-directory: pipeline/.github/repository-discovery
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      has_affected: ${{ steps.matrix.outputs.has_affected }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 0
+      - name: Checkout reusable pipeline implementation
+        uses: actions/checkout@v7
+        with:
+          repository: synapptech-devops/pipeline-template-powershell
+          ref: ${{ inputs.pipeline_ref || (github.repository == 'synapptech-devops/pipeline-template-powershell' && github.sha) || 'main' }}
+          token: ${{ secrets.PIPELINE_TOKEN || github.token }}
+          path: pipeline
+      - name: Read project toolchain versions
+        id: toolchain
+        run: pwsh -NoProfile -File src/toolchain.ps1
+      - name: Test PowerShell repository discovery
+        run: pwsh -NoProfile -File tests/run.ps1
+      - name: Determine applications changed since their own last release candidate
+        id: matrix
+        run: pwsh -NoProfile -File src/auto-rc.ps1 -Root "${{ github.workspace }}"
+
+  create-rc:
+    name: Create release candidate (${{ matrix.name }})
+    needs: discover-auto-rc
+    if: ${{ needs.discover-auto-rc.outputs.has_affected == 'true' }}
+    strategy:
+      # Independent per application: one app's build/test failure does not
+      # block or cancel rc creation for the others in the same main push.
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.discover-auto-rc.outputs.matrix) }}
+    # Serializes rc creation per application (across overlapping pushes/PRs, not
+    # across different applications in the same run — those still run in
+    # parallel). Without this, two concurrent runs touching the same app could
+    # both compute the same next rc.N and race pushing the tag.
+    concurrency:
+      group: rc-${{ matrix.id }}
+    uses: synapptech-devops/pipeline-template-powershell/.github/workflows/build-and-publish-release-candidate.yml@main
+    with:
+      pipeline_ref: ${{ inputs.pipeline_ref }}
+      app_id: ${{ matrix.id }}
+      ref: ${{ inputs.commit }}
+      bump: minor
+    secrets:
+      PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}

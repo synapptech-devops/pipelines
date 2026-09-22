@@ -1,0 +1,4 @@
+[CmdletBinding()]param([string]$Root='../..',[Parameter(Mandatory)][string]$AppId)
+Import-Module (Join-Path $PSScriptRoot 'Discovery.Pipeline.psm1') -Force
+if(-not $env:GITHUB_OUTPUT){throw 'GITHUB_OUTPUT is required'}
+$app=@((Get-RepositoryDiscovery $Root).applications|Where-Object{$_.id -ceq $AppId -or $_.legacyId -ceq $AppId}|Select-Object -First 1);if(-not $app.Count){throw "Application '$AppId' was not found by discovery at this ref."};$a=$app[0];$project=@($a.files|Where-Object{$_ -match '\.(csproj|fsproj|vbproj)$'}|Select-Object -First 1);Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "name=$($a.name)`nlegacy_id=$($a.legacyId)`npath=$(if($a.path){$a.path}else{'.'})`necosystem=$($a.ecosystem)`nproject_system=$($a.projectSystem)`nproject_file=$(if($project.Count){$project[0]}else{''})`ndockerfile=$($a.dockerfile)`nplatform=$($a.buildRequirements.platform)" -Encoding utf8

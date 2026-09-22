@@ -1,0 +1,224 @@
+name: Promote Release Candidate to Production
+
+on:
+  workflow_call:
+    inputs:
+      pipeline_ref:
+        description: Version or ref of the central pipeline repository
+        required: false
+        type: string
+        default: main
+      rc_tag:
+        description: Release candidate tag to promote
+        required: true
+        type: string
+
+    secrets:
+      PIPELINE_TOKEN:
+        description: Optional token for checking out a private central pipeline repository
+        required: false
+  workflow_dispatch:
+    inputs:
+      rc_tag:
+        description: Release-candidate tag to promote, e.g. web/v0.1.0-rc.1. It must be QA-signed-off and reachable from main.
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  qa-sign-off:
+    name: QA sign-off for release candidate
+    runs-on: [self-hosted, Windows, X64]
+    # Required reviewers for this environment are configured in the repository
+    # settings, not in workflow source. `deployment: false` makes this an
+    # approval gate without adding a misleading deployment record for QA.
+    environment:
+      name: qa
+      deployment: false
+    steps:
+      - name: Record QA approval
+        shell: pwsh
+        run: |
+          Write-Host 'QA approved this release candidate for production promotion.'
+
+  promote:
+    name: Promote and deploy to production
+    needs: qa-sign-off
+    runs-on: [self-hosted, Windows, X64]
+    # This job is blocked independently of QA. A successful job creates the
+    # production deployment record shown in GitHub's Deployments view.
+    environment:
+      name: production
+      url: ${{ vars.PRODUCTION_URL }}
+    # Never allow two production promotions to change release state or deploy
+    # concurrently. Do not cancel a queued, approved release automatically.
+    concurrency:
+      group: production-deployment
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: pipeline/.github/repository-discovery
+    outputs:
+      app_id: ${{ steps.promote.outputs.app_id }}
+      rc_version: ${{ steps.promote.outputs.rc_version }}
+      final_version: ${{ steps.promote.outputs.final_version }}
+      dockerfile: ${{ steps.app.outputs.dockerfile }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Checkout reusable pipeline implementation
+        uses: actions/checkout@v7
+        with:
+          repository: synapptech-devops/pipeline-template-powershell
+          ref: ${{ inputs.pipeline_ref || (github.repository == 'synapptech-devops/pipeline-template-powershell' && github.sha) || 'main' }}
+          token: ${{ secrets.PIPELINE_TOKEN || github.token }}
+          path: pipeline
+      - name: Read project toolchain versions
+        id: toolchain
+        run: pwsh -NoProfile -File src/toolchain.ps1
+      - name: Compute the final version and validate the rc tag
+        id: promote
+        run: >
+          pwsh -NoProfile -File src/version-promote.ps1 -Root "${{ github.workspace }}"
+          -RcTag "${{ inputs.rc_tag }}"
+      - name: Resolve the application name
+        id: app
+        run: >
+          pwsh -NoProfile -File src/app-lookup.ps1 -Root "${{ github.workspace }}"
+          -AppId "${{ steps.promote.outputs.app_id }}"
+      - name: Confirm the release candidate is reachable from main
+        # The rc tag was created against an arbitrary commit (any branch). Tagging
+        # main as final is deliberately a separate, later step (see
+        # create-release-candidate-manually.yml / promote-release-candidate-to-production.yml
+        # design) — this only checks that whatever was
+        # QA-signed-off already made it into main via the normal merge/PR flow.
+        # pwsh, not bash: a bare `run:` on this self-hosted Windows runner
+        # defaults to pwsh, and bash's `if ! cmd; then` silently does the
+        # wrong thing there instead of failing — see build-and-publish-release-candidate.yml.
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ steps.promote.outputs.source_sha }}
+          RC_TAG: ${{ steps.promote.outputs.rc_tag }}
+        run: |
+          git merge-base --is-ancestor $env:SOURCE_SHA HEAD
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::Commit $env:SOURCE_SHA (tag $env:RC_TAG) is not on main yet. Merge it before promoting."
+            exit 1
+          }
+      - name: Fetch the tested rc artifact from its GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >
+          pwsh -NoProfile -File src/artifact-fetch.ps1
+          -AppId "${{ steps.promote.outputs.app_id }}"
+          -Version "${{ steps.promote.outputs.rc_version }}"
+          -Destination "${{ github.workspace }}/pipeline/.github/repository-discovery/.pipeline-artifacts/promote"
+      - name: Validate release-candidate artifact publication inputs
+        shell: pwsh
+        env:
+          ARTIFACT_APP_ID: ${{ steps.promote.outputs.app_id }}
+          ARTIFACT_VERSION: ${{ steps.promote.outputs.final_version }}
+          ARTIFACT_DIRECTORY: ${{ github.workspace }}/pipeline/.github/repository-discovery/.pipeline-artifacts/promote
+          ARTIFACT_REF: ${{ steps.promote.outputs.source_sha }}
+        run: |
+          $required = @{
+            'app-id' = $env:ARTIFACT_APP_ID
+            'version' = $env:ARTIFACT_VERSION
+            'app-directory' = $env:ARTIFACT_DIRECTORY
+            'ref' = $env:ARTIFACT_REF
+          }
+          $missing = @($required.GetEnumerator() | Where-Object { [string]::IsNullOrWhiteSpace($_.Value) } | ForEach-Object Key)
+          if ($missing.Count -gt 0) {
+            throw "artifact-publish input(s) missing before invocation: $($missing -join ', ')."
+          }
+          Write-Host "artifact-publish inputs resolved for app '$env:ARTIFACT_APP_ID' (version '$env:ARTIFACT_VERSION', ref '$env:ARTIFACT_REF')."
+      - name: Re-publish it under the final version (no rebuild)
+        # Creates the final release/tag at the rc's exact source commit — the
+        # artifact re-packaged here is byte-for-byte what was fetched above, not
+        # rebuilt, so what passed QA is what ships. It is already the deployable
+        # output (not source), because that's what
+        # build-and-publish-release-candidate.yml published it as.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ARTIFACT_APP_ID: ${{ steps.promote.outputs.app_id }}
+          ARTIFACT_VERSION: ${{ steps.promote.outputs.final_version }}
+          ARTIFACT_DIRECTORY: ${{ github.workspace }}/pipeline/.github/repository-discovery/.pipeline-artifacts/promote
+          ARTIFACT_REF: ${{ steps.promote.outputs.source_sha }}
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File src/artifact-publish.ps1 `
+            -AppId $env:ARTIFACT_APP_ID `
+            -Version $env:ARTIFACT_VERSION `
+            -AppDirectory $env:ARTIFACT_DIRECTORY `
+            -Ref $env:ARTIFACT_REF
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Summarize
+        shell: pwsh
+        env:
+          RUN_ID: ${{ github.run_id }}
+          APP_NAME: ${{ steps.app.outputs.name }}
+          APP_ID: ${{ steps.promote.outputs.app_id }}
+          RC_TAG: ${{ steps.promote.outputs.rc_tag }}
+          FINAL_VERSION: ${{ steps.promote.outputs.final_version }}
+          FINAL_TAG: ${{ steps.promote.outputs.final_tag }}
+          SOURCE_SHA: ${{ steps.promote.outputs.source_sha }}
+          DOCKERFILE: ${{ steps.app.outputs.dockerfile }}
+        run: |
+          $lines = @(
+            '## Promoted to final version',
+            '',
+            '| Field | Value |',
+            '| --- | --- |',
+            "| Workflow run ID | $env:RUN_ID |",
+            "| Application | $env:APP_NAME ($env:APP_ID) |",
+            "| Promoted from | $env:RC_TAG |",
+            "| Final version | $env:FINAL_VERSION |",
+            "| Final tag | $env:FINAL_TAG |",
+            "| Commit | $env:SOURCE_SHA |"
+          )
+          if ($env:DOCKERFILE) {
+            $repository = $env:GITHUB_REPOSITORY.ToLowerInvariant()
+            $application = $env:APP_ID.ToLowerInvariant()
+            $lines += "| Container image | ghcr.io/$repository/${application}:$env:FINAL_VERSION |"
+          }
+          $lines | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+
+  promote-container:
+    name: Promote container image
+    needs: promote
+    if: ${{ needs.promote.outputs.dockerfile != '' }}
+    runs-on: [self-hosted, Linux, X64]
+    steps:
+      - name: Retag and push the release-candidate container image
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          APPLICATION_ID: ${{ needs.promote.outputs.app_id }}
+          RC_VERSION: ${{ needs.promote.outputs.rc_version }}
+          FINAL_VERSION: ${{ needs.promote.outputs.final_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repository="${GITHUB_REPOSITORY,,}"
+          application="${APPLICATION_ID,,}"
+          rc_image="ghcr.io/${repository}/${application}:${RC_VERSION}"
+          final_image="ghcr.io/${repository}/${application}:${FINAL_VERSION}"
+          printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          docker pull "$rc_image"
+          docker tag "$rc_image" "$final_image"
+          docker push "$final_image"
+      - name: Remove locally cached container images
+        if: ${{ always() }}
+        env:
+          APPLICATION_ID: ${{ needs.promote.outputs.app_id }}
+          RC_VERSION: ${{ needs.promote.outputs.rc_version }}
+          FINAL_VERSION: ${{ needs.promote.outputs.final_version }}
+        shell: bash
+        run: |
+          repository="${GITHUB_REPOSITORY,,}"
+          application="${APPLICATION_ID,,}"
+          docker image rm --force "ghcr.io/${repository}/${application}:${RC_VERSION}" "ghcr.io/${repository}/${application}:${FINAL_VERSION}" || true

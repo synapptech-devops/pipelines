@@ -1,0 +1,5 @@
+node_modules/
+dist/
+discovery-manifest.json
+affected-manifest.json
+.pipeline-artifacts/

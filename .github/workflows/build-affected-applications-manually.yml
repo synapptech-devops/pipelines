@@ -1,0 +1,234 @@
+name: Validation — Build affected applications manually
+
+on:
+  workflow_call:
+    inputs:
+      pipeline_ref:
+        description: Version or ref of the central pipeline repository
+        required: false
+        type: string
+        default: main
+      source_sha:
+        description: Source commit SHA
+        required: true
+        type: string
+      discovery_run_id:
+        description: Validation workflow run ID
+        required: true
+        type: string
+      publish_containers:
+        description: Publish validated containers
+        required: false
+        type: boolean
+        default: false
+
+    secrets:
+      PIPELINE_TOKEN:
+        description: Optional token for checking out a private central pipeline repository
+        required: false
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Commit SHA discovered by the upstream workflow
+        required: true
+        type: string
+      discovery_run_id:
+        description: Validation workflow run ID
+        required: true
+        type: string
+      publish_containers:
+        description: Publish validated Docker images to GitHub Container Registry
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  actions: read
+  contents: read
+  packages: write
+
+jobs:
+  prepare:
+    name: Prepare affected build matrix
+    defaults:
+      run:
+        working-directory: pipeline/.github/repository-discovery
+    runs-on: [self-hosted, Windows, X64]
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      has_affected: ${{ steps.matrix.outputs.has_affected }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.source_sha }}
+      - name: Checkout reusable pipeline implementation
+        uses: actions/checkout@v7
+        with:
+          repository: synapptech-devops/pipeline-template-powershell
+          ref: ${{ inputs.pipeline_ref || (github.repository == 'synapptech-devops/pipeline-template-powershell' && github.sha) || 'main' }}
+          token: ${{ secrets.PIPELINE_TOKEN || github.token }}
+          path: pipeline
+      - name: Read project toolchain versions
+        id: toolchain
+        run: pwsh -NoProfile -File src/toolchain.ps1
+      - name: Download discovery manifests from the triggering run
+        uses: actions/download-artifact@v7
+        with:
+          name: discovery-manifest
+          path: pipeline/.github/repository-discovery/.pipeline-artifacts
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.discovery_run_id }}
+      - name: Download affected-applications manifest from the triggering run
+        uses: actions/download-artifact@v7
+        with:
+          name: affected-applications-manifest
+          path: pipeline/.github/repository-discovery/.pipeline-artifacts
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.discovery_run_id }}
+      - name: Create build-and-test matrix
+        id: matrix
+        run: pwsh -NoProfile -File src/build-matrix.ps1 -Affected .pipeline-artifacts/affected-manifest.json -Discovery .pipeline-artifacts/discovery-manifest.json
+
+  build-and-test:
+    name: Build and test (${{ matrix.name }})
+    needs: prepare
+    if: ${{ needs.prepare.outputs.has_affected == 'true' }}
+    runs-on: [self-hosted, "${{ matrix.runner }}"]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.source_sha }}
+      - name: Checkout reusable pipeline implementation
+        uses: actions/checkout@v7
+        with:
+          repository: synapptech-devops/pipeline-template-powershell
+          ref: ${{ inputs.pipeline_ref || (github.repository == 'synapptech-devops/pipeline-template-powershell' && github.sha) || 'main' }}
+          token: ${{ secrets.PIPELINE_TOKEN || github.token }}
+          path: pipeline
+      - name: Read application toolchain versions
+        id: toolchain
+        env:
+          PROJECT_PATH: ${{ matrix.path }}
+        run: pwsh -NoProfile -File pipeline/.github/repository-discovery/src/toolchain.ps1
+      - uses: actions/setup-node@v7
+        if: ${{ matrix.ecosystem == 'node' && steps.toolchain.outputs.node != '' }}
+        with:
+          node-version: ${{ steps.toolchain.outputs.node }}
+          package-manager-cache: false
+      - uses: pnpm/action-setup@v6
+        if: ${{ matrix.ecosystem == 'node' && steps.toolchain.outputs.pnpm != '' }}
+        with:
+          version: ${{ steps.toolchain.outputs.pnpm }}
+          # Concurrent matrix jobs for different applications share this runner;
+          # a shared install path races on delete/recreate (EBUSY). A unique
+          # path per application keeps concurrent builds independent.
+          dest: ~/setup-pnpm-${{ matrix.id }}
+      - uses: actions/setup-dotnet@v4
+        if: ${{ matrix.ecosystem == 'dotnet' && steps.toolchain.outputs.globalJson != '' }}
+        with:
+          global-json-file: ${{ steps.toolchain.outputs.globalJson }}
+      - uses: microsoft/setup-msbuild@v2
+        if: ${{ matrix.projectSystem == 'legacy-msbuild' }}
+      - name: Install Node dependencies
+        if: ${{ matrix.ecosystem == 'node' }}
+        run: pnpm --dir "${{ matrix.path }}" install --no-frozen-lockfile
+      - name: Build Node application
+        if: ${{ matrix.ecosystem == 'node' }}
+        run: pnpm --dir "${{ matrix.path }}" run --if-present build
+      - name: Test Node application
+        if: ${{ matrix.ecosystem == 'node' }}
+        run: pnpm --dir "${{ matrix.path }}" run --if-present test
+      - name: Build modern .NET application
+        if: ${{ matrix.ecosystem == 'dotnet' && matrix.projectSystem == 'sdk-style' }}
+        working-directory: ${{ matrix.path }}
+        run: dotnet build "${{ github.workspace }}/${{ matrix.projectFile }}" --configuration Release
+      - name: Test modern .NET application
+        if: ${{ matrix.ecosystem == 'dotnet' && matrix.projectSystem == 'sdk-style' }}
+        working-directory: ${{ matrix.path }}
+        run: dotnet test "${{ github.workspace }}/${{ matrix.projectFile }}" --configuration Release --no-build
+      - name: Build legacy .NET application
+        if: ${{ matrix.ecosystem == 'dotnet' && matrix.projectSystem == 'legacy-msbuild' }}
+        run: msbuild "${{ matrix.projectFile }}" /t:Build /p:Configuration=Release
+      - name: Build Docker container
+        # Dockerfile discovery is scoped to the selected application's own
+        # directory. The repository root remains the build context so images
+        # can COPY shared packages or projects from elsewhere in a monorepo.
+        if: ${{ matrix.dockerfile != '' }}
+        env:
+          DOCKERFILE: ${{ matrix.dockerfile }}
+          IMAGE_TAG: ${{ matrix.id }}:${{ github.sha }}
+        shell: pwsh
+        run: docker build --file "$env:DOCKERFILE" --tag "$env:IMAGE_TAG" .
+      - name: Publish build and test result
+        if: ${{ always() }}
+        shell: pwsh
+        env:
+          RUN_ID: ${{ github.run_id }}
+          DISCOVERY_RUN_ID: ${{ inputs.discovery_run_id }}
+          RESULT: ${{ job.status }}
+          APPLICATION_NAME: ${{ matrix.name }}
+          APPLICATION_PATH: ${{ matrix.path }}
+          ECOSYSTEM: ${{ matrix.ecosystem }}
+          DOCKERFILE: ${{ matrix.dockerfile }}
+          RUNNER: self-hosted
+          PROJECT_FILE: ${{ matrix.projectFile }}
+        run: |
+          $lines = @(
+            "## Build and test: $env:APPLICATION_NAME",
+            '',
+            '| Field | Value |',
+            '| --- | --- |',
+            "| Workflow run ID | $env:RUN_ID |",
+            "| Discovery run ID | $env:DISCOVERY_RUN_ID |",
+            "| Result | **$env:RESULT** |",
+            "| Path | $env:APPLICATION_PATH |",
+            "| Ecosystem | $env:ECOSYSTEM |",
+            "| Runner | $env:RUNNER |"
+          )
+          if ($env:PROJECT_FILE) { $lines += "| Project file | $env:PROJECT_FILE |" }
+          if ($env:DOCKERFILE) { $lines += "| Dockerfile | $env:DOCKERFILE |" }
+          $lines | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+      - name: Publish Docker container to GitHub Container Registry
+        # Only publish images after this application's build and tests, plus
+        # its result summary, have completed successfully. Pull-request
+        # validation leaves this disabled: its local Docker build is a
+        # verification step only and produces no deployable container.
+        if: ${{ success() && inputs.publish_containers && matrix.dockerfile != '' }}
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          LOCAL_IMAGE: ${{ matrix.id }}:${{ github.sha }}
+          IMAGE_TAG: ${{ inputs.source_sha }}
+          APPLICATION_ID: ${{ matrix.id }}
+        run: |
+          $repository = $env:GITHUB_REPOSITORY.ToLowerInvariant()
+          $application = $env:APPLICATION_ID.ToLowerInvariant()
+          $image = "ghcr.io/$repository/$application`:$env:IMAGE_TAG"
+          $env:GITHUB_TOKEN | docker login ghcr.io --username $env:GITHUB_ACTOR --password-stdin
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          docker tag $env:LOCAL_IMAGE $image
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          docker push $image
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Remove locally built container image
+        # This runner is self-hosted and persistent, so the verification
+        # image built above (and, when publish_containers is true, pushed)
+        # would otherwise accumulate on its disk indefinitely across manual
+        # runs. Best-effort: the build step may never have run (no
+        # Dockerfile, or an earlier step failed), so a missing image must
+        # not fail an otherwise successful run.
+        if: ${{ always() && matrix.dockerfile != '' }}
+        shell: pwsh
+        env:
+          LOCAL_IMAGE: ${{ matrix.id }}:${{ github.sha }}
+          IMAGE_TAG: ${{ inputs.source_sha }}
+          APPLICATION_ID: ${{ matrix.id }}
+        run: |
+          $repository = $env:GITHUB_REPOSITORY.ToLowerInvariant()
+          $application = $env:APPLICATION_ID.ToLowerInvariant()
+          $image = "ghcr.io/$repository/$application`:$env:IMAGE_TAG"
+          docker image rm --force $env:LOCAL_IMAGE $image
+          exit 0

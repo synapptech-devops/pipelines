@@ -1,0 +1,334 @@
+name: Release — Build and publish a candidate (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      pipeline_ref:
+        description: Version or ref of the central pipeline repository
+        required: false
+        type: string
+        default: main
+      app_id:
+        description: Application id to version
+        required: true
+        type: string
+      ref:
+        description: Branch, tag, or commit SHA to build from
+        required: true
+        type: string
+      bump:
+        description: Version bump relative to this application's latest FINAL version (ignored the very first time; see initial_version)
+        required: false
+        type: string
+        default: minor
+      initial_version:
+        description: Starting version (X.Y.Z) if this application has never been versioned before. Defaults to 0.1.0.
+        required: false
+        type: string
+        default: ""
+    secrets:
+      PIPELINE_TOKEN:
+        description: Optional token for checking out a private central pipeline repository
+        required: false
+    outputs:
+      version:
+        value: ${{ jobs.build.outputs.version }}
+      tag:
+        value: ${{ jobs.build.outputs.tag }}
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build:
+    runs-on: [self-hosted, Windows, X64]
+    # This environment is deliberately on the job that performs the build,
+    # rather than on its callers, so the same approval gate protects both the
+    # automatic and manually-dispatched release-candidate paths.
+    environment:
+      name: release-candidate
+    defaults:
+      run:
+        working-directory: pipeline/.github/repository-discovery
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      source_sha: ${{ steps.checkout.outputs.sha }}
+      dockerfile: ${{ steps.app.outputs.dockerfile }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+      - name: Checkout reusable pipeline implementation
+        uses: actions/checkout@v7
+        with:
+          repository: synapptech-devops/pipeline-template-powershell
+          ref: ${{ inputs.pipeline_ref || (github.repository == 'synapptech-devops/pipeline-template-powershell' && github.sha) || 'main' }}
+          token: ${{ secrets.PIPELINE_TOKEN || github.token }}
+          path: pipeline
+      - name: Resolve the exact commit checked out
+        # Not github.sha: for workflow_dispatch that's the branch chosen in the "Run
+        # workflow" dropdown, which can differ from the ref input above. Everything
+        # downstream (the rc tag, the artifact) must point at what was actually built.
+        id: checkout
+        shell: pwsh
+        run: |
+          $sha = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($sha)) {
+            throw 'Could not resolve the SHA of the checked-out commit.'
+          }
+          "sha=$sha" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+      - name: Read project toolchain versions
+        id: toolchain
+        run: pwsh -NoProfile -File src/toolchain.ps1
+      - uses: actions/setup-node@v7
+        if: ${{ steps.toolchain.outputs.node != '' }}
+        with:
+          node-version: ${{ steps.toolchain.outputs.node }}
+          package-manager-cache: false
+      - uses: pnpm/action-setup@v6
+        if: ${{ steps.toolchain.outputs.pnpm != '' }}
+        with:
+          version: ${{ steps.toolchain.outputs.pnpm }}
+          # Concurrent build-and-publish-release-candidate.yml runs for different applications share this
+          # runner; a shared install path races on delete/recreate (EBUSY).
+          # A unique path per application keeps concurrent builds independent.
+          dest: ~/setup-pnpm-${{ inputs.app_id }}
+      - name: Resolve the application to version
+        id: app
+        run: pwsh -NoProfile -File src/app-lookup.ps1 -Root "${{ github.workspace }}" -AppId "${{ inputs.app_id }}"
+      - name: Compute the next release-candidate version
+        id: version
+        run: >
+          pwsh -NoProfile -File src/version-rc.ps1 -Root "${{ github.workspace }}"
+          -AppId "${{ inputs.app_id }}"
+          -LegacyId "${{ steps.app.outputs.legacy_id }}"
+          -Bump "${{ inputs.bump }}"
+          -InitialVersion "${{ inputs.initial_version }}"
+      - name: Read application toolchain versions
+        id: app_toolchain
+        env:
+          PROJECT_PATH: ${{ steps.app.outputs.path }}
+        run: pwsh -NoProfile -File src/toolchain.ps1
+      - uses: actions/setup-node@v7
+        if: ${{ steps.app.outputs.ecosystem == 'node' && steps.app_toolchain.outputs.node != '' }}
+        with:
+          node-version: ${{ steps.app_toolchain.outputs.node }}
+          package-manager-cache: false
+      - uses: pnpm/action-setup@v6
+        if: ${{ steps.app.outputs.ecosystem == 'node' && steps.app_toolchain.outputs.pnpm != '' }}
+        with:
+          version: ${{ steps.app_toolchain.outputs.pnpm }}
+          dest: ~/setup-pnpm-${{ inputs.app_id }}
+      - uses: actions/setup-dotnet@v4
+        if: ${{ steps.app.outputs.ecosystem == 'dotnet' && steps.app_toolchain.outputs.globalJson != '' }}
+        with:
+          global-json-file: ${{ steps.app_toolchain.outputs.globalJson }}
+      - uses: microsoft/setup-msbuild@v2
+        if: ${{ steps.app.outputs.project_system == 'legacy-msbuild' }}
+      - name: Install Node dependencies
+        if: ${{ steps.app.outputs.ecosystem == 'node' }}
+        working-directory: ${{ steps.app.outputs.path }}
+        run: pnpm install --no-frozen-lockfile
+      - name: Build Node application
+        if: ${{ steps.app.outputs.ecosystem == 'node' }}
+        working-directory: ${{ steps.app.outputs.path }}
+        run: pnpm run --if-present build
+      - name: Test Node application
+        if: ${{ steps.app.outputs.ecosystem == 'node' }}
+        working-directory: ${{ steps.app.outputs.path }}
+        run: pnpm run --if-present test
+      - name: Resolve Node application build output directory
+        # The deployable artifact for a React app is its static build output
+        # (dist/, build/, or out/, depending on the build tool), never the
+        # source tree "Build Node application" ran inside — that still has
+        # node_modules, source .tsx/.jsx, config files, none of which are
+        # meant to be deployed.
+        if: ${{ steps.app.outputs.ecosystem == 'node' }}
+        id: node_output
+        shell: pwsh
+        working-directory: ${{ steps.app.outputs.path }}
+        run: |
+          $candidates = 'dist', 'build', 'out'
+          foreach ($dir in $candidates) {
+            if (Test-Path -LiteralPath $dir -PathType Container) {
+              "path=$dir" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+              exit 0
+            }
+          }
+          throw "No build output directory found under $(Get-Location) (looked for: $($candidates -join ', ')). Make sure the app's build script emits one of these, or extend this step's search list to match the build tool in use."
+      - name: Build modern .NET application
+        if: ${{ steps.app.outputs.ecosystem == 'dotnet' && steps.app.outputs.project_system == 'sdk-style' }}
+        working-directory: ${{ steps.app.outputs.path }}
+        run: dotnet build "${{ github.workspace }}/${{ steps.app.outputs.project_file }}" --configuration Release
+      - name: Test modern .NET application
+        if: ${{ steps.app.outputs.ecosystem == 'dotnet' && steps.app.outputs.project_system == 'sdk-style' }}
+        working-directory: ${{ steps.app.outputs.path }}
+        run: dotnet test "${{ github.workspace }}/${{ steps.app.outputs.project_file }}" --configuration Release --no-build
+      - name: Publish modern .NET application
+        # `dotnet build` above only compiles to obj/bin for testing. The
+        # deployable output — the runnable .exe for a desktop app, or the
+        # dll + wwwroot + appsettings a web API is deployed from — comes
+        # from `dotnet publish`, into its own directory so it's never mixed
+        # with intermediate build/test artifacts.
+        if: ${{ steps.app.outputs.ecosystem == 'dotnet' && steps.app.outputs.project_system == 'sdk-style' }}
+        working-directory: ${{ steps.app.outputs.path }}
+        run: >
+          dotnet publish "${{ github.workspace }}/${{ steps.app.outputs.project_file }}"
+          --configuration Release
+          --output "${{ github.workspace }}/pipeline/.github/repository-discovery/.pipeline-artifacts/publish/${{ inputs.app_id }}"
+      - name: Build legacy .NET application
+        if: ${{ steps.app.outputs.ecosystem == 'dotnet' && steps.app.outputs.project_system == 'legacy-msbuild' }}
+        run: msbuild "${{ steps.app.outputs.project_file }}" /t:Build /p:Configuration=Release
+      - name: Determine the artifact directory to publish
+        # The published artifact must be the actual deployable output for
+        # the app's ecosystem — never the source tree app-lookup resolved
+        # (steps.app.outputs.path), which is source, config, and
+        # node_modules/obj/bin, not something you'd deploy.
+        id: artifact
+        shell: pwsh
+        env:
+          ECOSYSTEM: ${{ steps.app.outputs.ecosystem }}
+          PROJECT_SYSTEM: ${{ steps.app.outputs.project_system }}
+          APP_PATH: ${{ steps.app.outputs.path }}
+          NODE_OUTPUT_DIR: ${{ steps.node_output.outputs.path }}
+          APP_ID: ${{ inputs.app_id }}
+        run: |
+          if ($env:ECOSYSTEM -eq 'node') {
+            if ([string]::IsNullOrWhiteSpace($env:NODE_OUTPUT_DIR)) {
+              throw "No Node build output directory was resolved for $env:APP_PATH."
+            }
+            $artifactPath = Join-Path (Join-Path "${{ github.workspace }}" $env:APP_PATH) $env:NODE_OUTPUT_DIR
+          } elseif ($env:ECOSYSTEM -eq 'dotnet' -and $env:PROJECT_SYSTEM -eq 'sdk-style') {
+            # Matches the --output path "Publish modern .NET application" wrote to.
+            $artifactPath = Join-Path "${{ github.workspace }}" "pipeline/.github/repository-discovery/.pipeline-artifacts/publish/$env:APP_ID"
+          } elseif ($env:ECOSYSTEM -eq 'dotnet' -and $env:PROJECT_SYSTEM -eq 'legacy-msbuild') {
+            # msbuild /p:Configuration=Release above drops its output here by convention.
+            $artifactPath = Join-Path (Join-Path "${{ github.workspace }}" $env:APP_PATH) 'bin/Release'
+          } else {
+            throw "Don't know how to locate the deployable build output for ecosystem '$env:ECOSYSTEM' (project system '$env:PROJECT_SYSTEM')."
+          }
+          if (-not (Test-Path -LiteralPath $artifactPath -PathType Container)) {
+            throw "Resolved artifact directory '$artifactPath' does not exist. The build/publish step for ecosystem '$env:ECOSYSTEM' (project system '$env:PROJECT_SYSTEM') may have failed silently or written somewhere else."
+          }
+          "path=$artifactPath" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+      - name: Validate release-candidate artifact publication inputs
+        shell: pwsh
+        env:
+          ARTIFACT_APP_ID: ${{ inputs.app_id }}
+          ARTIFACT_VERSION: ${{ steps.version.outputs.version }}
+          ARTIFACT_DIRECTORY: ${{ steps.artifact.outputs.path }}
+          ARTIFACT_REF: ${{ steps.checkout.outputs.sha }}
+        run: |
+          $required = @{
+            'app-id' = $env:ARTIFACT_APP_ID
+            'version' = $env:ARTIFACT_VERSION
+            'app-directory' = $env:ARTIFACT_DIRECTORY
+            'ref' = $env:ARTIFACT_REF
+          }
+          $missing = @($required.GetEnumerator() | Where-Object { [string]::IsNullOrWhiteSpace($_.Value) } | ForEach-Object Key)
+          if ($missing.Count -gt 0) {
+            throw "artifact-publish input(s) missing before invocation: $($missing -join ', ')."
+          }
+          Write-Host "artifact-publish inputs resolved for app '$env:ARTIFACT_APP_ID' (version '$env:ARTIFACT_VERSION', ref '$env:ARTIFACT_REF')."
+      - name: Publish the release-candidate artifact to a GitHub Release
+        # This is the rc's tag AND its stored artifact in one step: creating the
+        # release also creates the underlying git tag at steps.checkout.outputs.sha,
+        # so there is no separate tag/push step. See Discovery.Release.psm1 and
+        # artifact-publish.ps1 to swap this for a different registry later.
+        # ARTIFACT_DIRECTORY is the deployable build output resolved above by
+        # "Determine the artifact directory to publish" — not the source tree.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ARTIFACT_APP_ID: ${{ inputs.app_id }}
+          ARTIFACT_VERSION: ${{ steps.version.outputs.version }}
+          ARTIFACT_DIRECTORY: ${{ steps.artifact.outputs.path }}
+          ARTIFACT_REF: ${{ steps.checkout.outputs.sha }}
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File src/artifact-publish.ps1 `
+            -AppId $env:ARTIFACT_APP_ID `
+            -Version $env:ARTIFACT_VERSION `
+            -AppDirectory $env:ARTIFACT_DIRECTORY `
+            -Ref $env:ARTIFACT_REF `
+            -Prerelease
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Summarize
+        # Same shell-mismatch hazard as elsewhere in this file: this used to
+        # be a bash heredoc with no `shell:`, which silently wrote nothing
+        # under this runner's default pwsh instead of failing.
+        shell: pwsh
+        env:
+          RUN_ID: ${{ github.run_id }}
+          APP_NAME: ${{ steps.app.outputs.name }}
+          APP_ID: ${{ inputs.app_id }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+          REF: ${{ inputs.ref }}
+          SHA: ${{ steps.checkout.outputs.sha }}
+          DOCKERFILE: ${{ steps.app.outputs.dockerfile }}
+        run: |
+          $lines = @(
+            '# Release candidate created',
+            '',
+            'The application was built, tested, and published as a release candidate.',
+            '',
+            '## Release candidate details',
+            '',
+            '| Field | Value |',
+            '| --- | --- |',
+            "| Workflow run ID | $env:RUN_ID |",
+            "| Application | $env:APP_NAME ($env:APP_ID) |",
+            "| Version | $env:VERSION |",
+            "| Tag | $env:TAG |",
+            "| Built from | $env:REF ($env:SHA) |"
+          )
+          if ($env:DOCKERFILE) { $lines += "| Dockerfile | $env:DOCKERFILE |" }
+          $lines | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+
+  build-and-publish-container:
+    name: Build and publish container image
+    needs: build
+    if: ${{ needs.build.outputs.dockerfile != '' }}
+    runs-on: [self-hosted, Linux, X64]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.build.outputs.source_sha }}
+      - name: Checkout reusable pipeline implementation
+        uses: actions/checkout@v7
+        with:
+          repository: synapptech-devops/pipeline-template-powershell
+          ref: ${{ inputs.pipeline_ref || (github.repository == 'synapptech-devops/pipeline-template-powershell' && github.sha) || 'main' }}
+          token: ${{ secrets.PIPELINE_TOKEN || github.token }}
+          path: pipeline
+      - name: Build and publish Docker container
+        env:
+          DOCKERFILE: ${{ needs.build.outputs.dockerfile }}
+          LOCAL_IMAGE: ${{ inputs.app_id }}:${{ needs.build.outputs.version }}
+          IMAGE_TAG: ${{ needs.build.outputs.version }}
+          APPLICATION_ID: ${{ inputs.app_id }}
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repository="${GITHUB_REPOSITORY,,}"
+          application="${APPLICATION_ID,,}"
+          image="ghcr.io/${repository}/${application}:${IMAGE_TAG}"
+          docker build --file "$DOCKERFILE" --tag "$LOCAL_IMAGE" .
+          printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          docker tag "$LOCAL_IMAGE" "$image"
+          docker push "$image"
+      - name: Remove locally built container image
+        if: ${{ always() }}
+        env:
+          LOCAL_IMAGE: ${{ inputs.app_id }}:${{ needs.build.outputs.version }}
+          IMAGE_TAG: ${{ needs.build.outputs.version }}
+          APPLICATION_ID: ${{ inputs.app_id }}
+        shell: bash
+        run: |
+          repository="${GITHUB_REPOSITORY,,}"
+          application="${APPLICATION_ID,,}"
+          docker image rm --force "$LOCAL_IMAGE" "ghcr.io/${repository}/${application}:${IMAGE_TAG}" || true

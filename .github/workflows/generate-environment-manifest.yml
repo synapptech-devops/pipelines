@@ -1,0 +1,95 @@
+name: Release — Generate environment manifest
+run-name: "Update environment manifest after ${{ github.event.workflow_run.name || 'manual request' }}"
+
+# A successful RC or production promotion changes the latest candidate/final
+# version that should be considered for deployment. Generate the manifest only
+# after the parent workflow has completed, so all of its tags and releases are
+# visible to this workflow.
+on:
+  workflow_call:
+    inputs:
+      pipeline_ref:
+        description: Version or ref of the central pipeline repository
+        required: false
+        type: string
+        default: main
+
+    secrets:
+      PIPELINE_TOKEN:
+        description: Optional token for checking out a private central pipeline repository
+        required: false
+  workflow_run:
+    workflows:
+      - Generate Release Candidate Artifacts
+      - Release — Create a candidate manually
+      - Promote Release Candidate to Production
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: [self-hosted, Windows, X64]
+    # Updating the one persistent release asset must not race when separate
+    # candidate workflows finish at nearly the same time.
+    concurrency:
+      group: environment-manifest
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: pipeline/.github/repository-discovery
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Checkout reusable pipeline implementation
+        uses: actions/checkout@v7
+        with:
+          repository: synapptech-devops/pipeline-template-powershell
+          ref: ${{ inputs.pipeline_ref || (github.repository == 'synapptech-devops/pipeline-template-powershell' && github.sha) || 'main' }}
+          token: ${{ secrets.PIPELINE_TOKEN || github.token }}
+          path: pipeline
+      - name: Read project toolchain versions
+        id: toolchain
+        run: pwsh -NoProfile -File src/toolchain.ps1
+      - name: Generate environment manifest
+        run: >
+          pwsh -NoProfile -File src/environment-manifest.ps1 -Root "${{ github.workspace }}"
+          -Output "${{ github.workspace }}/pipeline/.github/repository-discovery/.pipeline-artifacts/environment-manifest.json"
+      - name: Publish the current manifest to GitHub Releases
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >
+          pwsh -NoProfile -File src/environment-manifest-publish.ps1
+          -Manifest .pipeline-artifacts/environment-manifest.json
+          -Ref "${{ github.sha }}"
+      - name: Upload manifest with this workflow run
+        uses: actions/upload-artifact@v7
+        with:
+          name: environment-manifest
+          path: pipeline/.github/repository-discovery/.pipeline-artifacts/environment-manifest.json
+          retention-days: 90
+          if-no-files-found: error
+      - name: Summarize
+        shell: pwsh
+        run: |
+          $manifest = Get-Content -Raw -LiteralPath '.pipeline-artifacts/environment-manifest.json' | ConvertFrom-Json
+          $lines = @(
+            '## Environment manifest updated',
+            '',
+            'The current JSON is stored as `environment-manifest.json` on the GitHub Release tagged `pipeline/environment-manifest`.',
+            '',
+            '| Environment | Available versions |',
+            '| --- | --- |'
+          )
+          foreach ($environmentName in 'dev', 'qa', 'production') {
+            $entries = @($manifest.environments.$environmentName.psobject.Properties | ForEach-Object {
+              if ($_.Value.state -eq 'available') { "$($_.Name) $($_.Value.version)" } else { "$($_.Name) ($($_.Value.state))" }
+            })
+            $lines += "| $environmentName | $($entries -join '<br>') |"
+          }
+          $lines | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY

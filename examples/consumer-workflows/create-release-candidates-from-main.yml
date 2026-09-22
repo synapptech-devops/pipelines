@@ -1,0 +1,22 @@
+name: Generate Release Candidate Artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Full Git commit SHA to evaluate and build release candidates from
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  create-candidates:
+    uses: synapptech-devops/pipeline-template-powershell/.github/workflows/create-release-candidates-from-main.yml@main
+    with:
+      pipeline_ref: main
+      commit: ${{ inputs.commit }}
+    secrets:
+      PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}

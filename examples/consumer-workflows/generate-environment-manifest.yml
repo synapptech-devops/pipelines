@@ -1,0 +1,21 @@
+name: Release — Generate environment manifest
+
+on:
+  workflow_run:
+    workflows:
+      - Generate Release Candidate Artifacts
+      - Release — Create a candidate manually
+      - Promote Release Candidate to Production
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    uses: synapptech-devops/pipeline-template-powershell/.github/workflows/generate-environment-manifest.yml@main
+    with:
+      pipeline_ref: main
+    secrets:
+      PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}

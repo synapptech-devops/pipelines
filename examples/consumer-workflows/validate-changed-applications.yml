@@ -1,0 +1,21 @@
+name: Validation — Validate changed applications
+run-name: "Integrated branch validation: ${{ github.ref_name }}"
+
+on:
+  workflow_dispatch:
+  push:
+    branches-ignore: [main]
+  pull_request:
+    branches-ignore: [main]
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  validate:
+    uses: synapptech-devops/pipeline-template-powershell/.github/workflows/validate-changed-applications.yml@main
+    with:
+      pipeline_ref: main
+    secrets:
+      PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}

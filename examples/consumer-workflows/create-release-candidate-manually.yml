@@ -1,0 +1,40 @@
+name: Release — Create a candidate manually
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_id:
+        description: Application id from a discovery manifest
+        required: true
+        type: string
+      ref:
+        description: Source branch, tag, or commit
+        required: true
+        default: main
+        type: string
+      bump:
+        description: Version bump relative to the latest final version
+        required: false
+        default: minor
+        type: choice
+        options: [major, minor, patch]
+      initial_version:
+        description: Starting version for an unversioned application
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  create-candidate:
+    uses: synapptech-devops/pipeline-template-powershell/.github/workflows/create-release-candidate-manually.yml@main
+    with:
+      pipeline_ref: main
+      app_id: ${{ inputs.app_id }}
+      ref: ${{ inputs.ref }}
+      bump: ${{ inputs.bump }}
+      initial_version: ${{ inputs.initial_version }}
+    secrets:
+      PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}

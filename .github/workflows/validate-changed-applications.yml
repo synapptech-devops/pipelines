@@ -1,0 +1,201 @@
+name: Validation — Validate changed applications
+run-name: "Integrated branch validation: ${{ github.ref_name }}"
+
+on:
+  workflow_call:
+    inputs:
+      pipeline_ref:
+        description: Version or ref of the central pipeline repository
+        required: false
+        type: string
+        default: main
+
+    secrets:
+      PIPELINE_TOKEN:
+        description: Optional token for checking out a private central pipeline repository
+        required: false
+  workflow_dispatch:
+  push:
+    branches-ignore: [main]
+  pull_request:
+    branches-ignore: [main]
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  discover:
+    runs-on: [self-hosted, Windows, X64]
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+      has_affected: ${{ steps.matrix.outputs.has_affected }}
+    defaults:
+      run:
+        working-directory: pipeline/.github/repository-discovery
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Check out the PR head rather than GitHub's synthetic merge commit so
+          # discovery, affected analysis, and the downstream build use one SHA.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          # Required for the affected-application comparisons below.
+          fetch-depth: 0
+      - name: Checkout reusable pipeline implementation
+        uses: actions/checkout@v7
+        with:
+          repository: synapptech-devops/pipeline-template-powershell
+          ref: ${{ inputs.pipeline_ref || (github.repository == 'synapptech-devops/pipeline-template-powershell' && github.sha) || 'main' }}
+          token: ${{ secrets.PIPELINE_TOKEN || github.token }}
+          path: pipeline
+      - name: Read project toolchain versions
+        id: toolchain
+        run: pwsh -NoProfile -File src/toolchain.ps1
+      - name: Test PowerShell repository discovery
+        run: pwsh -NoProfile -File tests/run.ps1
+      - name: Discover applications and publish summary
+        id: discovery
+        run: pwsh -NoProfile -File src/discovery.ps1 -Root "${{ github.workspace }}" -Output "${{ github.workspace }}/pipeline/.github/repository-discovery/discovery-manifest.json"
+      - name: Publish discovered applications to the job summary
+        run: pwsh -NoProfile -File src/summary.ps1 -Manifest discovery-manifest.json
+      - name: Resolve last successful validated branch baseline
+        id: baseline
+        if: ${{ github.event_name == 'push' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        # Build and test are jobs in this workflow. Therefore, a successful
+        # workflow run is a successful discovery *and* validation baseline.
+        run: pwsh -NoProfile -File src/baseline.ps1 -Root "${{ github.workspace }}" -Repository "${{ github.repository }}" -Branch "${{ github.ref_name }}" -Head "${{ github.sha }}" -Workflow ".github/workflows/validate-changed-applications.yml" -RunNamePrefix "Integrated branch validation:"
+      - name: Discover applications affected since the validated baseline
+        if: ${{ github.event_name == 'push' && steps.baseline.outputs.mode == 'affected' }}
+        run: pwsh -NoProfile -File src/affected.ps1 -Root "${{ github.workspace }}" -Base "${{ steps.baseline.outputs.base }}" -Head "${{ github.sha }}" -Output "${{ github.workspace }}/pipeline/.github/repository-discovery/affected-manifest.json"
+      - name: Discover applications affected by this pull request
+        if: ${{ github.event_name == 'pull_request' }}
+        run: pwsh -NoProfile -File src/affected.ps1 -Root "${{ github.workspace }}" -Base "${{ github.event.pull_request.base.sha }}" -Head "${{ github.event.pull_request.head.sha }}" -Output "${{ github.workspace }}/pipeline/.github/repository-discovery/affected-manifest.json"
+      - name: Select all applications for full validation
+        if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && steps.baseline.outputs.mode != 'affected') }}
+        run: pwsh -NoProfile -File src/all-affected.ps1 -Discovery discovery-manifest.json -Output affected-manifest.json
+      - name: Publish rebuild and versioning summary
+        run: pwsh -NoProfile -File src/affected-summary.ps1 -Manifest affected-manifest.json
+      - name: Create build-and-test matrix
+        id: matrix
+        run: pwsh -NoProfile -File src/build-matrix.ps1 -Affected affected-manifest.json -Discovery discovery-manifest.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: discovery-manifest
+          path: pipeline/.github/repository-discovery/discovery-manifest.json
+          include-hidden-files: true
+      - name: Upload affected-applications manifest
+        uses: actions/upload-artifact@v7
+        with:
+          name: affected-applications-manifest
+          path: pipeline/.github/repository-discovery/affected-manifest.json
+          include-hidden-files: true
+
+  build-and-test:
+    name: Build and test (${{ matrix.name }})
+    needs: discover
+    # Preserve the existing fork-PR boundary: fork PRs get discovery feedback,
+    # while builds run only for branch pushes and same-repository PRs.
+    if: ${{ needs.discover.outputs.has_affected == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: [self-hosted, "${{ matrix.runner }}"]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Match discovery's checkout, avoiding GitHub's synthetic PR merge SHA.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - name: Checkout reusable pipeline implementation
+        uses: actions/checkout@v7
+        with:
+          repository: synapptech-devops/pipeline-template-powershell
+          ref: ${{ inputs.pipeline_ref || (github.repository == 'synapptech-devops/pipeline-template-powershell' && github.sha) || 'main' }}
+          token: ${{ secrets.PIPELINE_TOKEN || github.token }}
+          path: pipeline
+      - name: Read application toolchain versions
+        id: toolchain
+        env:
+          PROJECT_PATH: ${{ matrix.path }}
+        run: pwsh -NoProfile -File pipeline/.github/repository-discovery/src/toolchain.ps1
+      - uses: actions/setup-node@v7
+        if: ${{ matrix.ecosystem == 'node' && steps.toolchain.outputs.node != '' }}
+        with:
+          node-version: ${{ steps.toolchain.outputs.node }}
+          package-manager-cache: false
+      - uses: pnpm/action-setup@v6
+        if: ${{ matrix.ecosystem == 'node' && steps.toolchain.outputs.pnpm != '' }}
+        with:
+          version: ${{ steps.toolchain.outputs.pnpm }}
+          # Concurrent matrix jobs for different applications share this runner;
+          # a shared install path races on delete/recreate (EBUSY). A unique
+          # path per application keeps concurrent builds independent.
+          dest: ~/setup-pnpm-${{ matrix.id }}
+      - uses: actions/setup-dotnet@v4
+        if: ${{ matrix.ecosystem == 'dotnet' && steps.toolchain.outputs.globalJson != '' }}
+        with:
+          global-json-file: ${{ steps.toolchain.outputs.globalJson }}
+      - uses: microsoft/setup-msbuild@v2
+        if: ${{ matrix.projectSystem == 'legacy-msbuild' }}
+      - name: Install Node dependencies
+        if: ${{ matrix.ecosystem == 'node' }}
+        run: pnpm --dir "${{ matrix.path }}" install --no-frozen-lockfile
+      - name: Build Node application
+        if: ${{ matrix.ecosystem == 'node' }}
+        run: pnpm --dir "${{ matrix.path }}" run --if-present build
+      - name: Test Node application
+        if: ${{ matrix.ecosystem == 'node' }}
+        run: pnpm --dir "${{ matrix.path }}" run --if-present test
+      - name: Build modern .NET application
+        if: ${{ matrix.ecosystem == 'dotnet' && matrix.projectSystem == 'sdk-style' }}
+        working-directory: ${{ matrix.path }}
+        run: dotnet build "${{ github.workspace }}/${{ matrix.projectFile }}" --configuration Release
+      - name: Test modern .NET application
+        if: ${{ matrix.ecosystem == 'dotnet' && matrix.projectSystem == 'sdk-style' }}
+        working-directory: ${{ matrix.path }}
+        run: dotnet test "${{ github.workspace }}/${{ matrix.projectFile }}" --configuration Release --no-build
+      - name: Build legacy .NET application
+        if: ${{ matrix.ecosystem == 'dotnet' && matrix.projectSystem == 'legacy-msbuild' }}
+        run: msbuild "${{ matrix.projectFile }}" /t:Build /p:Configuration=Release
+      - name: Validate Docker container build
+        # Build each Dockerfile locally to verify it, then remove the temporary
+        # image. Non-main automation neither retains nor publishes deployable
+        # container artifacts.
+        if: ${{ matrix.dockerfile != '' }}
+        env:
+          DOCKERFILE: ${{ matrix.dockerfile }}
+          IMAGE_TAG: validation-${{ matrix.id }}:${{ github.sha }}
+        shell: pwsh
+        run: |
+          docker build --file "$env:DOCKERFILE" --tag "$env:IMAGE_TAG" .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          docker image rm --force "$env:IMAGE_TAG"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Publish build and test result
+        if: ${{ always() }}
+        shell: pwsh
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RESULT: ${{ job.status }}
+          APPLICATION_NAME: ${{ matrix.name }}
+          APPLICATION_PATH: ${{ matrix.path }}
+          ECOSYSTEM: ${{ matrix.ecosystem }}
+          DOCKERFILE: ${{ matrix.dockerfile }}
+          RUNNER: self-hosted
+          PROJECT_FILE: ${{ matrix.projectFile }}
+        run: |
+          $lines = @(
+            "## Build and test: $env:APPLICATION_NAME",
+            '',
+            '| Field | Value |',
+            '| --- | --- |',
+            "| Workflow run ID | $env:RUN_ID |",
+            "| Result | **$env:RESULT** |",
+            "| Path | $env:APPLICATION_PATH |",
+            "| Ecosystem | $env:ECOSYSTEM |",
+            "| Runner | $env:RUNNER |"
+          )
+          if ($env:PROJECT_FILE) { $lines += "| Project file | $env:PROJECT_FILE |" }
+          if ($env:DOCKERFILE) { $lines += "| Dockerfile | $env:DOCKERFILE |" }
+          $lines | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY

@@ -1,0 +1,23 @@
+name: Generate Development Artifacts
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Successful validation workflow run ID
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  packages: write
+
+jobs:
+  publish-development:
+    uses: synapptech-devops/pipeline-template-powershell/.github/workflows/publish-development-artifacts.yml@main
+    with:
+      pipeline_ref: main
+      source_run_id: ${{ inputs.source_run_id }}
+    secrets:
+      PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}

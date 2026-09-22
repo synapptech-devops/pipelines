@@ -1,0 +1,34 @@
+name: Validation — Build affected applications manually
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Commit SHA discovered by the upstream validation workflow
+        required: true
+        type: string
+      discovery_run_id:
+        description: Validation workflow run ID
+        required: true
+        type: string
+      publish_containers:
+        description: Publish validated Docker images to GitHub Container Registry
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  actions: read
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    uses: synapptech-devops/pipeline-template-powershell/.github/workflows/build-affected-applications-manually.yml@main
+    with:
+      pipeline_ref: main
+      source_sha: ${{ inputs.source_sha }}
+      discovery_run_id: ${{ inputs.discovery_run_id }}
+      publish_containers: ${{ inputs.publish_containers }}
+    secrets:
+      PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}

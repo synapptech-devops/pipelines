@@ -1,0 +1,22 @@
+name: Promote Release Candidate to Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      rc_tag:
+        description: Release-candidate tag to promote
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  promote:
+    uses: synapptech-devops/pipeline-template-powershell/.github/workflows/promote-release-candidate-to-production.yml@main
+    with:
+      pipeline_ref: main
+      rc_tag: ${{ inputs.rc_tag }}
+    secrets:
+      PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}
