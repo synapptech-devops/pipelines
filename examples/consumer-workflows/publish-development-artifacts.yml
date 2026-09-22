@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   publish-development:
-    uses: synapptech-devops/pipelines/.github/workflows/publish-development-artifacts.yml@main
+    uses: synapptech-devops/pipelines/.github/workflows/publish-development-artifacts.yml@v1
     with:
       pipeline_ref: main
       source_run_id: ${{ inputs.source_run_id }}

@@ -67,7 +67,7 @@ jobs:
     # cannot calculate and publish the same next RC version.
     concurrency:
       group: rc-${{ inputs.app_id }}
-    uses: synapptech-devops/pipelines/.github/workflows/build-and-publish-release-candidate.yml@main
+    uses: synapptech-devops/pipelines/.github/workflows/build-and-publish-release-candidate.yml@v1
     with:
       pipeline_ref: ${{ inputs.pipeline_ref }}
       app_id: ${{ inputs.app_id }}

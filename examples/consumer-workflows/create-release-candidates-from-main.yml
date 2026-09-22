@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   create-candidates:
-    uses: synapptech-devops/pipelines/.github/workflows/create-release-candidates-from-main.yml@main
+    uses: synapptech-devops/pipelines/.github/workflows/create-release-candidates-from-main.yml@v1
     with:
       pipeline_ref: main
       commit: ${{ inputs.commit }}

@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   generate:
-    uses: synapptech-devops/pipelines/.github/workflows/generate-environment-manifest.yml@main
+    uses: synapptech-devops/pipelines/.github/workflows/generate-environment-manifest.yml@v1
     with:
       pipeline_ref: main
     secrets:

@@ -85,7 +85,7 @@ jobs:
     # both compute the same next rc.N and race pushing the tag.
     concurrency:
       group: rc-${{ matrix.id }}
-    uses: synapptech-devops/pipelines/.github/workflows/build-and-publish-release-candidate.yml@main
+    uses: synapptech-devops/pipelines/.github/workflows/build-and-publish-release-candidate.yml@v1
     with:
       pipeline_ref: ${{ inputs.pipeline_ref }}
       app_id: ${{ matrix.id }}

@@ -110,7 +110,7 @@ permissions:
 
 jobs:
   validate:
-    uses: synapptech-devops/pipelines/.github/workflows/validate-changed-applications.yml@main
+    uses: synapptech-devops/pipelines/.github/workflows/validate-changed-applications.yml@v1
     with:
       pipeline_ref: main
     secrets:
@@ -148,9 +148,9 @@ Release tags, GitHub Releases, container images, and deployment records belong t
 
 ## Updating the shared pipeline
 
-The examples reference `@main` and set `pipeline_ref: main`. This is the simplest centrally managed model: merge a change to this repository's `main`, and consuming repositories pick it up on their next workflow run without changes to their caller files.
+The examples reference `@v1` and set `pipeline_ref: main`. This is the simplest centrally managed model: merge a change to this repository's `main`, and consuming repositories pick it up on their next workflow run without changes to their caller files.
 
-For staged releases, update the caller's reusable-workflow ref and `pipeline_ref` together. For example, use `@v1` and `pipeline_ref: v1` only after a `v1` ref exists in this repository. Two release flows call the candidate-builder reusable workflow internally using a central `@main` reference; before pinning a release, update those internal references to the same release ref too. A commit SHA can be used for immutable workflow references, but all internal reusable-workflow references and `pipeline_ref` must identify the same revision.
+For staged releases, update the caller's reusable-workflow ref and `pipeline_ref` together. For example, use `@v1` and `pipeline_ref: v1` only after a `v1` ref exists in this repository. Two release flows call the candidate-builder reusable workflow internally using a central `@v1` reference; before pinning a release, update those internal references to the same release ref too. A commit SHA can be used for immutable workflow references, but all internal reusable-workflow references and `pipeline_ref` must identify the same revision.
 
 ## Troubleshooting
 

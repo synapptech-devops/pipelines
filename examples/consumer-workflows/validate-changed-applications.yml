@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   validate:
-    uses: synapptech-devops/pipelines/.github/workflows/validate-changed-applications.yml@main
+    uses: synapptech-devops/pipelines/.github/workflows/validate-changed-applications.yml@v1
     with:
       pipeline_ref: main
     secrets:
