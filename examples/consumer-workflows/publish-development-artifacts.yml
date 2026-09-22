@@ -17,7 +17,7 @@ jobs:
   publish-development:
     uses: synapptech-devops/pipelines/.github/workflows/publish-development-artifacts.yml@v1
     with:
-      pipeline_ref: main
+      pipeline_ref: v1
       source_run_id: ${{ inputs.source_run_id }}
     secrets:
       PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}

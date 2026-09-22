@@ -16,6 +16,6 @@ jobs:
   validate:
     uses: synapptech-devops/pipelines/.github/workflows/validate-changed-applications.yml@v1
     with:
-      pipeline_ref: main
+      pipeline_ref: v1
     secrets:
       PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}

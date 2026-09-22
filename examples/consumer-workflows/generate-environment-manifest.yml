@@ -16,6 +16,6 @@ jobs:
   generate:
     uses: synapptech-devops/pipelines/.github/workflows/generate-environment-manifest.yml@v1
     with:
-      pipeline_ref: main
+      pipeline_ref: v1
     secrets:
       PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}

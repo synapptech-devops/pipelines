@@ -31,7 +31,7 @@ jobs:
   create-candidate:
     uses: synapptech-devops/pipelines/.github/workflows/create-release-candidate-manually.yml@v1
     with:
-      pipeline_ref: main
+      pipeline_ref: v1
       app_id: ${{ inputs.app_id }}
       ref: ${{ inputs.ref }}
       bump: ${{ inputs.bump }}

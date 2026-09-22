@@ -16,7 +16,7 @@ jobs:
   promote:
     uses: synapptech-devops/pipelines/.github/workflows/promote-release-candidate-to-production.yml@v1
     with:
-      pipeline_ref: main
+      pipeline_ref: v1
       rc_tag: ${{ inputs.rc_tag }}
     secrets:
       PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}

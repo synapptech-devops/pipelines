@@ -26,7 +26,7 @@ jobs:
   build:
     uses: synapptech-devops/pipelines/.github/workflows/build-affected-applications-manually.yml@v1
     with:
-      pipeline_ref: main
+      pipeline_ref: v1
       source_sha: ${{ inputs.source_sha }}
       discovery_run_id: ${{ inputs.discovery_run_id }}
       publish_containers: ${{ inputs.publish_containers }}
