@@ -16,7 +16,7 @@ jobs:
   create-candidates:
     uses: synapptech-devops/pipelines/.github/workflows/create-release-candidates-from-main.yml@v1
     with:
-      pipeline_ref: main
+      pipeline_ref: v1
       commit: ${{ inputs.commit }}
     secrets:
       PIPELINE_TOKEN: ${{ secrets.PIPELINE_TOKEN }}
