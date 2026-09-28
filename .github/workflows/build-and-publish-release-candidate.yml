@@ -42,7 +42,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: arc-org-runners
     # This environment is deliberately on the job that performs the build,
     # rather than on its callers, so the same approval gate protects both the
     # automatic and manually-dispatched release-candidate paths.
@@ -292,7 +292,7 @@ jobs:
     name: Build and publish container image
     needs: build
     if: ${{ needs.build.outputs.dockerfile != '' }}
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: arc-org-runners
     steps:
       - uses: actions/checkout@v7
         with:

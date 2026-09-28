@@ -26,7 +26,7 @@ permissions:
 
 jobs:
   discover:
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: arc-org-runners
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       has_affected: ${{ steps.matrix.outputs.has_affected }}
@@ -98,7 +98,7 @@ jobs:
     # Preserve the existing fork-PR boundary: fork PRs get discovery feedback,
     # while builds run only for branch pushes and same-repository PRs.
     if: ${{ needs.discover.outputs.has_affected == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: [self-hosted, "${{ matrix.runner }}"]
+    runs-on: arc-org-runners
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}

@@ -42,7 +42,7 @@ concurrency:
 jobs:
   discover-auto-rc:
     name: Select applications for release candidates
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: arc-org-runners
     defaults:
       run:
         working-directory: pipeline/.github/repository-discovery

@@ -32,7 +32,7 @@ permissions:
 jobs:
   generate:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: arc-org-runners
     # Updating the one persistent release asset must not race when separate
     # candidate workflows finish at nearly the same time.
     concurrency:
