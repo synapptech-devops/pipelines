@@ -33,7 +33,7 @@ permissions:
 jobs:
   prepare:
     name: Validate source run and prepare build matrix
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: arc-org-runners
     defaults:
       run:
         working-directory: pipeline/.github/repository-discovery
@@ -88,7 +88,7 @@ jobs:
     name: Build dev-test artifacts (${{ matrix.name }})
     needs: prepare
     if: ${{ needs.prepare.outputs.has_affected == 'true' }}
-    runs-on: [self-hosted, "${{ matrix.runner }}"]
+    runs-on: arc-org-runners
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}

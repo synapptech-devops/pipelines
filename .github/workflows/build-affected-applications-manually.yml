@@ -53,7 +53,7 @@ jobs:
     defaults:
       run:
         working-directory: pipeline/.github/repository-discovery
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: arc-org-runners
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
       has_affected: ${{ steps.matrix.outputs.has_affected }}
@@ -93,7 +93,7 @@ jobs:
     name: Build and test (${{ matrix.name }})
     needs: prepare
     if: ${{ needs.prepare.outputs.has_affected == 'true' }}
-    runs-on: [self-hosted, "${{ matrix.runner }}"]
+    runs-on: arc-org-runners
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}

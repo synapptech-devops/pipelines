@@ -31,7 +31,7 @@ permissions:
 jobs:
   qa-sign-off:
     name: QA sign-off for release candidate
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: arc-org-runners
     # Required reviewers for this environment are configured in the repository
     # settings, not in workflow source. `deployment: false` makes this an
     # approval gate without adding a misleading deployment record for QA.
@@ -47,7 +47,7 @@ jobs:
   promote:
     name: Promote and deploy to production
     needs: qa-sign-off
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: arc-org-runners
     # This job is blocked independently of QA. A successful job creates the
     # production deployment record shown in GitHub's Deployments view.
     environment:
@@ -192,7 +192,7 @@ jobs:
     name: Promote container image
     needs: promote
     if: ${{ needs.promote.outputs.dockerfile != '' }}
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: arc-org-runners
     steps:
       - name: Retag and push the release-candidate container image
         env:
